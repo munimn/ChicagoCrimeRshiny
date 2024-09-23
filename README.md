@@ -1,0 +1,1 @@
+The ipynb file is for the the Data Cleaning and Merging part and the rmd file is the analysis part and the R shiny app. The datasets can be found in the zip file. The pdf is the attached research paper "Evaluating the Dynamics of Racial Bias in Arrest Patterns"
