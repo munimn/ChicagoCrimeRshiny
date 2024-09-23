@@ -1,0 +1,423 @@
+---
+title: "R shiny App"
+author: "Nafis Ahmed"
+date: '2024-05-28'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r}
+library(tidyverse)
+library(knitr)
+library(leaflet)
+library(sf)
+library(dbplyr)
+```
+
+
+```{r}
+# Load the shapefile
+chicago_areas <- st_read("chicago.geojson")
+```
+
+```{r}
+# Create a color palette
+pal <- colorFactor(palette = "viridis", domain = chicago_areas$community)
+
+# Create the leaflet map
+leaflet(data = chicago_areas) %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addPolygons(
+    fillColor = ~pal(community),  # Use a color palette for different community areas
+    weight = 2,
+    opacity = 1,
+    color = 'white',
+    dashArray = '3',
+    fillOpacity = 0.7,
+    highlight = highlightOptions(
+      weight = 5,
+      color = "#666",
+      dashArray = "",
+      fillOpacity = 0.7,
+      bringToFront = TRUE
+    ),
+    label = ~community,  # Assuming 'NAME' is the field with the community area names
+    labelOptions = labelOptions(
+      style = list("font-weight" = "normal", padding = "3px 8px"),
+      textsize = "15px",
+      direction = "auto"
+    )
+  ) %>%
+  addLegend(pal = pal, values = ~community, opacity = 0.7, title = "Chicago Community Areas", position = "bottomright")
+
+```
+
+```{r}
+metadata <- read.csv("metadata (1).csv")
+```
+```{r}
+summary(metadata)
+```
+
+```{r}
+metadata$Arrest <- as.logical(metadata$Arrest)
+```
+```{r}
+metadata$Arrest <- as.numeric(metadata$Arrest)
+```
+
+```{r}
+metadata <- metadata %>% mutate(BLACK = BLACK/TOT_POP * 100, WHITE = WHITE/TOT_POP *100)
+```
+```{r}
+metadata <- metadata %>% mutate(HISP = HISP/TOT_POP * 100, ASIAN = ASIAN/TOT_POP *100)
+```
+```{r}
+metadata <- metadata %>% mutate(UNEMP = UNEMP/(EMP+UNEMP) * 100)
+```
+
+```{r}
+metadata <- metadata %>% mutate(TOT_POP = as.integer(TOT_POP))
+```
+
+```{r}
+library(skimr)
+skim(metadata)
+```
+
+
+```{r}
+communitydata <- metadata %>% select(c(Community.Area,TOT_POP,WHITE,HISP,BLACK,ASIAN,UNEMP,MEDINC,GEOG))
+```
+```{r}
+communitydata <- communitydata %>% distinct(Community.Area,.keep_all=TRUE)
+```
+```{r}
+communitydata <- communitydata %>% mutate(OTHER = 100 -(BLACK+ASIAN+WHITE+HISP))
+```
+```{r}
+ggplot(metadata, aes(fill=Arrest, y=BLACK, x=Year)) + 
+    geom_bar(position="stack", stat="identity")
+```
+```{r}
+metadata<- metadata %>% mutate(MEDINC = MEDINC/1000)
+```
+
+
+
+```{r}
+arrest_percentage <- metadata %>%
+  group_by(Year, Community.Area, Primary.Type) %>%
+  summarize(
+    Arrest_Percentage = mean(Arrest) * 100,
+    Total_Observations = n(),  # Count of total observations in each group
+    Total_Arrests = sum(Arrest)  # Sum of 'Arrest' instances in each group
+  )
+# Create a bar plot
+ggplot(arrest_percentage, aes(x = Year, y = Arrest_Percentage)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(x = "Year", y = "Arrest Percentage") +
+  ggtitle("Arrest Percentage by Year")
+
+```
+```{r}
+chicago_areas <- chicago_areas %>% rename(Community.Area = area_numbe)
+
+```
+```{r}
+chicago_areas$Community.Area <- as.integer(chicago_areas$Community.Area)
+communitydata <- left_join(communitydata, chicago_areas, by = "Community.Area")
+```
+```{r}
+arrest_percentage <- data.frame(arrest_percentage)
+```
+
+```{r}
+# Transform the dataset
+arrest_percentage <- arrest_percentage %>%
+  pivot_wider(
+    names_from = Primary.Type,
+    values_from = Arrest_Percentage,
+    id_cols = c(Year, Community.Area)
+  )
+```
+```{r}
+joined_df <- left_join(arrest_percentage, communitydata, by = "Community.Area")
+```
+
+
+```{r}
+joined_df2018 <- joined_df %>% filter(Year==2018)
+```
+```{r}
+joined_df2018 <- st_as_sf(joined_df2018)
+```
+```{r}
+
+popup1 <- function(dataset, variable) {
+  return(
+    paste0(
+      "<b>", dataset$GEOG, " (", dataset$Community.Area, ")</b>",
+      "<br><font color='red'>Median income ($000): ",
+      format(dataset$MEDINC, nsmall = 3), "</font>",
+      "<br><font color='red'>% White Pop : ",
+      format(dataset$WHITE, nsmall = 2), "</font>",
+       "<br><font color='red'>% Black Pop : ",
+      format(dataset$BLACK, nsmall = 2), "</font>",
+       "<br><font color='red'>% Hispanic Pop : ",
+      format(dataset$HISP, nsmall = 2), "</font>",
+       "<br><font color='red'>% Asian Pop : ",
+      format(dataset$ASIAN, nsmall = 2), "</font>",
+        "<br><font color='red'>% Other Pop : ",
+      format(dataset$OTHER, nsmall = 2), "</font>",
+       "<br><font color='red'>% Unemployed : ",
+      format(dataset$UNEMP, nsmall = 2), "</font>",
+       "<br><font color='red'>Total Pop : ",
+      format(dataset$TOT_POP, nsmall = 2), "</font>",
+      "<br>", variable, ": ",
+      format(dataset[[variable]], digits = 2), "%"
+    ) %>%
+      lapply(htmltools::HTML)
+  )
+}
+```
+```{r}
+
+
+# Create a color palette
+pal <- colorBin("YlGnBu", domain = joined_df2018$ASSAULT, bins = c(0,3,5,7,10,17,25,30,100), reverse = TRUE)
+
+# Create the leaflet map
+leaflet(data = joined_df2018) %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  addPolygons(
+    fillColor = ~pal(ASSAULT),  # Use a color palette for the arrest percentages
+    weight = 2,
+    opacity = 1,
+    color = 'white',
+    dashArray = '3',
+    fillOpacity = 0.7,
+    highlight = highlightOptions(
+      weight = 5,
+      color = "#666",
+      dashArray = "",
+      fillOpacity = 0.7,
+      bringToFront = TRUE
+    ),
+    label = ~GEOG,  # Assuming 'GEOG' is the field with the community area names
+    labelOptions = labelOptions(
+      style = list("font-weight" = "normal", padding = "3px 8px"),
+      textsize = "15px",
+      direction = "auto"
+    )
+  ) %>%
+  addLegend(
+    pal = pal,
+    values =joined_df2018$ASSAULT,
+    opacity = 0.7,
+    title = "Chicago Community Areas",
+    position = "bottomright"
+  )
+
+
+```
+
+
+```{r}
+createCrimeMap1 <- function(data, variable) {
+  pal <- colorBin("YlGnBu", domain = data[[variable]], bins = c(0,3,5,7,10,17,25,30,100), reverse = TRUE)
+  
+  leaflet(data = data) %>%
+    addTiles() %>%
+    addPolygons(
+      fillColor = ~pal(get(variable)),
+      weight = 2,
+      opacity = 1,
+      color = 'white',
+      dashArray = '3',
+      fillOpacity = 0.7,
+      highlight = highlightOptions(
+        weight = 5,
+        color = "#666",
+        dashArray = "",
+        fillOpacity = 0.7,
+        bringToFront = TRUE
+      ),
+      label = popup1( data,variable),
+      labelOptions = labelOptions(
+        style = list("font-weight" = "normal", padding = "3px 8px"),
+        textsize = "15px",
+        direction = "auto"
+      )
+    ) %>%
+    addLegend(
+      pal = pal,
+      values = data[[variable]],
+      opacity = 0.7,
+      title = paste("Crime Type:", variable),
+      position = "bottomright"
+    )
+}
+
+```
+```{r}
+# Function to create the second type of crime map
+createCrimeMap2 <- function(data, variable) {
+  pal <- colorBin("YlGnBu", domain = data[[variable]], bins = c(0,3,5,7,10,17,25,30,100), reverse = TRUE)
+  
+  leaflet(data, options = leafletOptions(crsClass = "L.CRS.EPSG3857"), width="100%") %>%
+    addPolygons(weight = 0.5, color = "gray", opacity = 0.7,
+                fillColor = ~pal(get(variable)), fillOpacity = 1, smoothFactor = 0.5,
+                label = popup1(data, variable),
+                labelOptions = labelOptions(direction = "auto")) %>%
+    addPolygons(data = data, fill = FALSE, color="black", weight = 1) %>%
+    addLegend(pal = pal, values = data[[variable]], opacity = 0.7, title =  paste("Crime Type:", variable),, position = "bottomright")
+}
+```
+```{r}
+data2 <- metadata 
+```
+```{r}
+createStackedBarPlot <- function(data, plot_type) {
+  if (plot_type == "Crime Type by Arrests") {
+    ggplot(data, aes(x = Primary.Type, fill = as.factor(Arrest))) +
+      geom_bar(position = "stack") +
+      labs(x = "Crime Type", y = "Count", fill = "Arrest") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  } else if (plot_type == "Community Area by Total Arrests vs No Arrests") {
+    data$Year <- format(as.Date(data$Date), "%Y")
+    ggplot(data, aes(x = GEOG, fill = as.factor(Arrest))) +
+      geom_bar(position = "stack") +
+      labs(x = "Community Area", y = "Count", fill = "Arrest") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  }
+}
+```
+```{r}
+class(metadata$Year)
+```
+
+```{r}
+# Function to create pie chart for arrests by year
+createPieChart <- function(data, crime_type) {
+  filtered_data <- data %>%
+    filter(Primary.Type == crime_type) %>%
+    group_by(Year, Arrest) %>%
+    summarise(Count = n()) %>%
+    mutate(Percentage = Count / sum(Count) * 100)
+
+  ggplot(filtered_data, aes(x = "", y = Percentage, fill = as.factor(Arrest))) +
+    geom_bar(stat = "identity", width = 1) +
+    coord_polar("y") +
+    labs(fill = "Arrest", y = "Percentage", x = "") +
+    facet_wrap(~ Year) +
+    theme_minimal() +
+    theme(axis.text.x = element_blank(), axis.ticks = element_blank())
+}
+```
+```{r}
+# Function to create pie chart for arrests by year
+createPieChartY <- function(data, year) {
+  filtered_data <- data %>%
+    filter(Year == year) %>%
+    group_by(Year, Arrest) %>%
+    summarise(Count = n()) %>%
+    mutate(Percentage = Count / sum(Count) * 100)
+
+  ggplot(filtered_data, aes(x = "", y = Percentage, fill = as.factor(Arrest))) +
+    geom_bar(stat = "identity", width = 1) +
+    coord_polar("y") +
+    labs(fill = "Arrest", y = "Percentage", x = "") +
+    facet_wrap(~ Year) +
+    theme_minimal() +
+    theme(axis.text.x = element_blank(), axis.ticks = element_blank())
+}
+```
+```{r}
+library(shiny)
+```
+```{r}
+ui <- fluidPage(
+  titlePanel("Chicago Crime Map"),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput("year", "Select Year:", choices = unique(joined_df$Year)),
+      selectInput("variable", "Select Variable:",
+                  choices = c("ASSAULT", "BATTERY", "NARCOTICS", "ROBBERY", "THEFT", "CRIMINAL DAMAGE", "DECEPTIVE PRACTICE")),
+      selectInput("map_type", "Select Map Type:",
+                  choices = c("Type 1", "Type 2")),
+      dateRangeInput("date_range", "Select Date Range:",
+                     start = min(metadata$Date), end = max(metadata$Date)),
+      selectInput("plot_type", "Select Plot Type:",
+                  choices = c("Crime Type by Arrests", "Community Area by Total Arrests vs No Arrests")),
+      actionButton("update", "Update View")
+    ),
+    mainPanel(
+      leafletOutput("crime_map"),
+      textOutput("min_max"),
+      h3("Arrest Percentage Graph"),
+plotOutput("stacked_bar_graph"),
+h3("Arrest percentage for a specific year and crime type"),
+fluidRow(
+        column(6, plotOutput("year_pie", height = "400px")),
+        column(6, plotOutput("arrest_pie_chart", height = "400px"))
+      )
+    )
+  )
+)
+server <- function(input, output, session) {
+  filtered_data <- reactive({
+    joined_df %>%
+      filter(Year == input$year) %>%
+      st_as_sf()
+  })
+  filtered_crime_data <- reactive({
+    metadata %>%
+      filter(Date >= input$date_range[1] & Date <= input$date_range[2])
+  })
+  
+  observeEvent(input$update, {
+    selected_variable <- input$variable
+    selected_map_type <- input$map_type
+    selected_plot_type <- input$plot_type
+    selected_year <- input$year
+    
+    output$crime_map <- renderLeaflet({
+      if (selected_map_type == "Type 1") {
+        createCrimeMap1(filtered_data(), selected_variable)
+      } else {
+        createCrimeMap2(filtered_data(), selected_variable)
+      }
+    })
+    
+    output$min_max <- renderText({
+      data <- filtered_data()
+      min_val <- min(data[[selected_variable]], na.rm = TRUE)
+      max_val <- max(data[[selected_variable]], na.rm = TRUE)
+      paste("Minimum Arrest Percentage for", selected_variable, ":", min_val, "%", "\n",
+            "Maximum Arrest Percentage for", selected_variable, ":", max_val, "%")
+    })
+    
+output$stacked_bar_graph <- renderPlot({
+      createStackedBarPlot(filtered_crime_data(), selected_plot_type)
+    })
+output$year_pie <- renderPlot({
+      createPieChart(filtered_crime_data(), selected_variable)
+    })
+output$arrest_pie_chart <- renderPlot({
+      createPieChartY(filtered_crime_data(), selected_year)
+    })
+
+  })
+}
+
+shinyApp(ui, server)
+shinyApp(ui, server)
+
+```
+
+
